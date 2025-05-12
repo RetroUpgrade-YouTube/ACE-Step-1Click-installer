@@ -17,7 +17,7 @@ from loguru import logger
 from tqdm import tqdm
 import json
 import math
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 
 # from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from acestep.schedulers.scheduling_flow_match_euler_discrete import (
@@ -89,7 +89,6 @@ REPO_ID = "ACE-Step/ACE-Step-v1-3.5B"
 
 # class ACEStepPipeline(DiffusionPipeline):
 class ACEStepPipeline:
-
     def __init__(
         self,
         checkpoint_dir=None,
@@ -99,11 +98,15 @@ class ACEStepPipeline:
         persistent_storage_path=None,
         torch_compile=False,
         cpu_offload=False,
+        quantized=False,
+        overlapped_decode=False,
         **kwargs,
     ):
         if not checkpoint_dir:
             if persistent_storage_path is None:
-                checkpoint_dir = os.path.join(os.path.expanduser("~"), ".cache/ace-step/checkpoints")
+                checkpoint_dir = os.path.join(
+                    os.path.expanduser("~"), ".cache/ace-step/checkpoints"
+                )
                 os.makedirs(checkpoint_dir, exist_ok=True)
             else:
                 checkpoint_dir = os.path.join(persistent_storage_path, "checkpoints")
@@ -126,149 +129,39 @@ class ACEStepPipeline:
         self.loaded = False
         self.torch_compile = torch_compile
         self.cpu_offload = cpu_offload
+        self.quantized = quantized
+        self.overlapped_decode = overlapped_decode
 
-    def load_checkpoint(self, checkpoint_dir=None):
+    def load_checkpoint(self, checkpoint_dir=None, export_quantized_weights=False):
         device = self.device
+        checkpoint_dir_models = None
+        
+        if checkpoint_dir is not None:
+            required_dirs = ["music_dcae_f8c8", "music_vocoder", "ace_step_transformer", "umt5-base"]
+            all_dirs_exist = True
+            for dir_name in required_dirs:
+                dir_path = os.path.join(checkpoint_dir, dir_name)
+                if not os.path.exists(dir_path):
+                    all_dirs_exist = False
+                    break
+            
+            if all_dirs_exist:
+                logger.info(f"Load models from: {checkpoint_dir}")
+                checkpoint_dir_models = checkpoint_dir
+        
+        if checkpoint_dir_models is None:
+            if checkpoint_dir is None:
+                logger.info(f"Download models from Hugging Face: {REPO_ID}")
+                checkpoint_dir_models = snapshot_download(REPO_ID)
+            else:
+                logger.info(f"Download models from Hugging Face: {REPO_ID}, cache to: {checkpoint_dir}")
+                checkpoint_dir_models = snapshot_download(REPO_ID, cache_dir=checkpoint_dir)
 
-        dcae_model_path = os.path.join(checkpoint_dir, "music_dcae_f8c8")
-        vocoder_model_path = os.path.join(checkpoint_dir, "music_vocoder")
-        ace_step_model_path = os.path.join(checkpoint_dir, "ace_step_transformer")
-        text_encoder_model_path = os.path.join(checkpoint_dir, "umt5-base")
-
-        files_exist = (
-            os.path.exists(os.path.join(dcae_model_path, "config.json"))
-            and os.path.exists(
-                os.path.join(dcae_model_path, "diffusion_pytorch_model.safetensors")
-            )
-            and os.path.exists(os.path.join(vocoder_model_path, "config.json"))
-            and os.path.exists(
-                os.path.join(vocoder_model_path, "diffusion_pytorch_model.safetensors")
-            )
-            and os.path.exists(os.path.join(ace_step_model_path, "config.json"))
-            and os.path.exists(
-                os.path.join(ace_step_model_path, "diffusion_pytorch_model.safetensors")
-            )
-            and os.path.exists(os.path.join(text_encoder_model_path, "config.json"))
-            and os.path.exists(
-                os.path.join(text_encoder_model_path, "model.safetensors")
-            )
-            and os.path.exists(
-                os.path.join(text_encoder_model_path, "special_tokens_map.json")
-            )
-        )
-
-        if not files_exist:
-            logger.info(
-                f"Checkpoint directory {checkpoint_dir} is not complete, downloading from Hugging Face Hub"
-            )
-
-            # download music dcae model
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="music_dcae_f8c8",
-                filename="config.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="music_dcae_f8c8",
-                filename="diffusion_pytorch_model.safetensors",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-
-            # download vocoder model
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="music_vocoder",
-                filename="config.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="music_vocoder",
-                filename="diffusion_pytorch_model.safetensors",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-
-            # download ace_step transformer model
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="ace_step_transformer",
-                filename="config.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="ace_step_transformer",
-                filename="diffusion_pytorch_model.safetensors",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-
-            # download text encoder model
-            # os.makedirs(text_encoder_model_path, exist_ok=True) # hf_hub_download should create subdirectories
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="umt5-base",
-                filename="config.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="umt5-base",
-                filename="model.safetensors",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="umt5-base",
-                filename="special_tokens_map.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="umt5-base",
-                filename="tokenizer_config.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-            hf_hub_download(
-                repo_id=REPO_ID,
-                subfolder="umt5-base",
-                filename="tokenizer.json",
-                local_dir=checkpoint_dir,
-                local_dir_use_symlinks=False,
-            )
-
-            # Verify files were downloaded correctly
-            if not all([
-                os.path.exists(os.path.join(dcae_model_path, "config.json")),
-                os.path.exists(os.path.join(dcae_model_path, "diffusion_pytorch_model.safetensors")),
-                os.path.exists(os.path.join(vocoder_model_path, "config.json")),
-                os.path.exists(os.path.join(vocoder_model_path, "diffusion_pytorch_model.safetensors")),
-                os.path.exists(os.path.join(ace_step_model_path, "config.json")),
-                os.path.exists(os.path.join(ace_step_model_path, "diffusion_pytorch_model.safetensors")),
-                os.path.exists(os.path.join(text_encoder_model_path, "config.json")),
-                os.path.exists(os.path.join(text_encoder_model_path, "model.safetensors")),
-                os.path.exists(os.path.join(text_encoder_model_path, "special_tokens_map.json")),
-            ]):
-                logger.error("Failed to download all required model files. Please check your internet connection and try again.")
-                logger.info(f"DCAE model path: {dcae_model_path}, files exist: {os.path.exists(os.path.join(dcae_model_path, 'config.json'))}")
-                logger.info(f"Vocoder model path: {vocoder_model_path}, files exist: {os.path.exists(os.path.join(vocoder_model_path, 'config.json'))}")
-                logger.info(f"ACE-Step model path: {ace_step_model_path}, files exist: {os.path.exists(os.path.join(ace_step_model_path, 'config.json'))}")
-                logger.info(f"Text encoder model path: {text_encoder_model_path}, files exist: {os.path.exists(os.path.join(text_encoder_model_path, 'config.json'))}")
-                raise RuntimeError("Model download failed. See logs for details.")
-
-            logger.info("Models downloaded successfully")
-
+        dcae_model_path = os.path.join(checkpoint_dir_models, "music_dcae_f8c8")
+        vocoder_model_path = os.path.join(checkpoint_dir_models, "music_vocoder")
+        ace_step_model_path = os.path.join(checkpoint_dir_models, "ace_step_transformer")
+        text_encoder_model_path = os.path.join(checkpoint_dir_models, "umt5-base")
+        
         dcae_checkpoint_path = dcae_model_path
         vocoder_checkpoint_path = vocoder_model_path
         ace_step_checkpoint_path = ace_step_model_path
@@ -279,7 +172,7 @@ class ACEStepPipeline:
             vocoder_checkpoint_path=vocoder_checkpoint_path,
         )
         # self.music_dcae.to(device).eval().to(self.dtype)
-        if self.cpu_offload: # might be redundant
+        if self.cpu_offload:  # might be redundant
             self.music_dcae = self.music_dcae.to("cpu").eval().to(self.dtype)
         else:
             self.music_dcae = self.music_dcae.to(device).eval().to(self.dtype)
@@ -289,9 +182,13 @@ class ACEStepPipeline:
         )
         # self.ace_step_transformer.to(device).eval().to(self.dtype)
         if self.cpu_offload:
-            self.ace_step_transformer = self.ace_step_transformer.to("cpu").eval().to(self.dtype)
+            self.ace_step_transformer = (
+                self.ace_step_transformer.to("cpu").eval().to(self.dtype)
+            )
         else:
-            self.ace_step_transformer = self.ace_step_transformer.to(device).eval().to(self.dtype)
+            self.ace_step_transformer = (
+                self.ace_step_transformer.to(device).eval().to(self.dtype)
+            )
 
         lang_segment = LangSegment()
 
@@ -419,6 +316,204 @@ class ACEStepPipeline:
             self.ace_step_transformer = torch.compile(self.ace_step_transformer)
             self.text_encoder_model = torch.compile(self.text_encoder_model)
 
+            if export_quantized_weights:
+                from torchao.quantization import (
+                    quantize_,
+                    Int4WeightOnlyConfig,
+                )
+
+                group_size = 128
+                use_hqq = True
+                quantize_(
+                    self.ace_step_transformer,
+                    Int4WeightOnlyConfig(group_size=group_size, use_hqq=use_hqq),
+                )
+                quantize_(
+                    self.text_encoder_model,
+                    Int4WeightOnlyConfig(group_size=group_size, use_hqq=use_hqq),
+                )
+
+                # save quantized weights
+                torch.save(
+                    self.ace_step_transformer.state_dict(),
+                    os.path.join(
+                        ace_step_model_path, "diffusion_pytorch_model_int4wo.bin"
+                    ),
+                )
+                print(
+                    "Quantized Weights Saved to: ",
+                    os.path.join(
+                        ace_step_model_path, "diffusion_pytorch_model_int4wo.bin"
+                    ),
+                )
+                torch.save(
+                    self.text_encoder_model.state_dict(),
+                    os.path.join(text_encoder_model_path, "pytorch_model_int4wo.bin"),
+                )
+                print(
+                    "Quantized Weights Saved to: ",
+                    os.path.join(text_encoder_model_path, "pytorch_model_int4wo.bin"),
+                )
+
+
+    def load_quantized_checkpoint(self, checkpoint_dir=None):
+        device = self.device
+
+        dcae_model_path = os.path.join(checkpoint_dir, "music_dcae_f8c8")
+        vocoder_model_path = os.path.join(checkpoint_dir, "music_vocoder")
+        ace_step_model_path = os.path.join(checkpoint_dir, "ace_step_transformer")
+        text_encoder_model_path = os.path.join(checkpoint_dir, "umt5-base")
+ 
+
+        dcae_checkpoint_path = dcae_model_path
+        vocoder_checkpoint_path = vocoder_model_path
+        ace_step_checkpoint_path = ace_step_model_path
+        text_encoder_checkpoint_path = text_encoder_model_path
+
+        self.music_dcae = MusicDCAE(
+            dcae_checkpoint_path=dcae_checkpoint_path,
+            vocoder_checkpoint_path=vocoder_checkpoint_path,
+        )
+        if self.cpu_offload:
+            self.music_dcae.eval().to(self.dtype).to(self.device)
+        else:
+            self.music_dcae.eval().to(self.dtype).to('cpu')
+        self.music_dcae = torch.compile(self.music_dcae)
+
+
+        self.ace_step_transformer = ACEStepTransformer2DModel.from_pretrained(ace_step_checkpoint_path)
+        self.ace_step_transformer.eval().to(self.dtype).to('cpu')
+        self.ace_step_transformer = torch.compile(self.ace_step_transformer)
+        self.ace_step_transformer.load_state_dict(
+            torch.load(
+                os.path.join(ace_step_checkpoint_path, "diffusion_pytorch_model_int4wo.bin"),
+                map_location=self.device,
+            ),assign=True
+        )
+        self.ace_step_transformer.torchao_quantized = True
+
+        self.text_encoder_model = UMT5EncoderModel.from_pretrained(text_encoder_checkpoint_path)
+        self.text_encoder_model.eval().to(self.dtype).to('cpu')
+        self.text_encoder_model = torch.compile(self.text_encoder_model)
+        self.text_encoder_model.load_state_dict(
+            torch.load(
+                os.path.join(text_encoder_model_path, "pytorch_model_int4wo.bin"),
+                map_location=self.device,
+            ),assign=True
+        )
+        self.text_encoder_model.torchao_quantized = True
+
+        self.text_tokenizer = AutoTokenizer.from_pretrained(
+            text_encoder_checkpoint_path
+        )
+
+        lang_segment = LangSegment()
+        lang_segment.setfilters(
+            [
+                "af",
+                "am",
+                "an",
+                "ar",
+                "as",
+                "az",
+                "be",
+                "bg",
+                "bn",
+                "br",
+                "bs",
+                "ca",
+                "cs",
+                "cy",
+                "da",
+                "de",
+                "dz",
+                "el",
+                "en",
+                "eo",
+                "es",
+                "et",
+                "eu",
+                "fa",
+                "fi",
+                "fo",
+                "fr",
+                "ga",
+                "gl",
+                "gu",
+                "he",
+                "hi",
+                "hr",
+                "ht",
+                "hu",
+                "hy",
+                "id",
+                "is",
+                "it",
+                "ja",
+                "jv",
+                "ka",
+                "kk",
+                "km",
+                "kn",
+                "ko",
+                "ku",
+                "ky",
+                "la",
+                "lb",
+                "lo",
+                "lt",
+                "lv",
+                "mg",
+                "mk",
+                "ml",
+                "mn",
+                "mr",
+                "ms",
+                "mt",
+                "nb",
+                "ne",
+                "nl",
+                "nn",
+                "no",
+                "oc",
+                "or",
+                "pa",
+                "pl",
+                "ps",
+                "pt",
+                "qu",
+                "ro",
+                "ru",
+                "rw",
+                "se",
+                "si",
+                "sk",
+                "sl",
+                "sq",
+                "sr",
+                "sv",
+                "sw",
+                "ta",
+                "te",
+                "th",
+                "tl",
+                "tr",
+                "ug",
+                "uk",
+                "ur",
+                "vi",
+                "vo",
+                "wa",
+                "xh",
+                "zh",
+                "zu",
+            ]
+        )
+        self.lang_segment = lang_segment
+        self.lyric_tokenizer = VoiceBpeTokenizer()
+
+        self.loaded = True
+
     @cpu_offload("text_encoder_model")
     def get_text_embeddings(self, texts, device, text_max_length=256):
         inputs = self.text_tokenizer(
@@ -487,7 +582,9 @@ class ACEStepPipeline:
                     processed_input_seeds = list(map(int, manual_seeds.split(",")))
                 elif manual_seeds.isdigit():
                     processed_input_seeds = int(manual_seeds)
-            elif isinstance(manual_seeds, list) and all(isinstance(s, int) for s in manual_seeds):
+            elif isinstance(manual_seeds, list) and all(
+                isinstance(s, int) for s in manual_seeds
+            ):
                 if len(manual_seeds) > 0:
                     processed_input_seeds = list(manual_seeds)
             elif isinstance(manual_seeds, int):
@@ -508,7 +605,7 @@ class ACEStepPipeline:
                 else:
                     current_seed_for_generator = processed_input_seeds[-1]
             if current_seed_for_generator is None:
-                 current_seed_for_generator = torch.randint(0, 2**32, (1,)).item()
+                current_seed_for_generator = torch.randint(0, 2**32, (1,)).item()
             random_generators[i].manual_seed(current_seed_for_generator)
             actual_seeds.append(current_seed_for_generator)
         return random_generators, actual_seeds
@@ -1409,15 +1506,21 @@ class ACEStepPipeline:
     ):
         output_audio_paths = []
         bs = latents.shape[0]
-        audio_lengths = [target_wav_duration_second * sample_rate] * bs
         pred_latents = latents
         with torch.no_grad():
-            _, pred_wavs = self.music_dcae.decode(pred_latents, sr=sample_rate)
+            if self.overlapped_decode and target_wav_duration_second > 48:
+                _, pred_wavs = self.music_dcae.decode_overlap(pred_latents, sr=sample_rate)
+            else:
+                _, pred_wavs = self.music_dcae.decode(pred_latents, sr=sample_rate)
         pred_wavs = [pred_wav.cpu().float() for pred_wav in pred_wavs]
         for i in tqdm(range(bs)):
             output_audio_path = self.save_wav_file(
-                pred_wavs[i], i, save_path=save_path, sample_rate=sample_rate, format=format
-            )            
+                pred_wavs[i],
+                i,
+                save_path=save_path,
+                sample_rate=sample_rate,
+                format=format,
+            )
             output_audio_paths.append(output_audio_path)
         return output_audio_paths
 
@@ -1434,11 +1537,15 @@ class ACEStepPipeline:
         else:
             ensure_directory_exists(os.path.dirname(save_path))
             if os.path.isdir(save_path):
-                logger.info(f"Provided save_path '{save_path}' is a directory. Appending timestamped filename.")
-                output_path_wav = os.path.join(save_path, f"output_{time.strftime('%Y%m%d%H%M%S')}_{idx}.wav")
+                logger.info(
+                    f"Provided save_path '{save_path}' is a directory. Appending timestamped filename."
+                )
+                output_path_wav = os.path.join(
+                    save_path, f"output_{time.strftime('%Y%m%d%H%M%S')}_{idx}.wav"
+                )
             else:
                 output_path_wav = save_path
-        
+
         target_wav = target_wav.float()
         logger.info(f"Saving audio to {output_path_wav}")
         torchaudio.save(
@@ -1504,7 +1611,10 @@ class ACEStepPipeline:
 
         if not self.loaded:
             logger.warning("Checkpoint not loaded, loading checkpoint...")
-            self.load_checkpoint(self.checkpoint_dir)
+            if self.quantized:
+                self.load_quantized_checkpoint(self.checkpoint_dir)
+            else:
+                self.load_checkpoint(self.checkpoint_dir)
             load_model_cost = time.time() - start_time
             logger.info(f"Model loaded in {load_model_cost:.2f} seconds.")
 

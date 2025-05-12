@@ -16,11 +16,6 @@ Video Guide and demo of the 1 click installer : Comming soon
     <a href="https://huggingface.co/spaces/ACE-Step/ACE-Step">Space Demo</a> |
     <a href="https://discord.gg/PeWDxrkdj7">Discord</a> 
 </p>
-<p align="center">
-  <a href="./README.md"><img alt="README in English" src="https://img.shields.io/badge/English-d9d9d9"></a>
-  <a href="./README_CN.md"><img alt="简体中文版自述文件" src="https://img.shields.io/badge/简体中文-d9d9d9"></a>
-  <a href="./README_JA.md"><img alt="日本語のREADME" src="https://img.shields.io/badge/日本語-d9d9d9"></a>
-</p>
 
 <p align="center">
     <img src="./assets/orgnization_logos.png" width="100%" alt="StepFun Logo">
@@ -44,6 +39,15 @@ Rather than building yet another end-to-end text-to-music pipeline, our vision i
 
 
 ## 📢 News and Updates
+- 🔥 **2025.05.10:** Memory Optimization Update
+  - Reduced Max VRAM to 8GB, making it more compatible with consumer devices
+  - Recommended launch options:
+    ```bash
+    acestep --torch_compile true --cpu_offload true --overlapped_decode true
+    ```
+
+![image](./assets/cpu_offload_performance.png)
+
 - 📢 **2025.05.09:** Graidio Demo support Audio2Audio. ComfyUI: [Ace_Step_4x_a2a.json](./assets/Ace_Step_4x_a2a.json)
 <p align="center">
     <img src="assets/audio2audio_demo.gif" alt="Audio2Audio Demo" width="50%">
@@ -278,6 +282,8 @@ If you intend to integrate ACE-Step as a library into your own Python projects, 
 - `--share`: Enable Gradio sharing link (default: False)
 - `--bf16`: Use bfloat16 precision for faster inference (default: True)
 - `--torch_compile`: Use `torch.compile()` to optimize the model, speeding up inference (default: False). **Not Supported on Windows**
+- `--cpu_offload`: Offload model weights to CPU to save GPU memory (default: False)
+- `--overlapped_decode`: Use overlapped decoding to speed up inference (default: False)
 
 ## 📱 User Interface Guide
 
