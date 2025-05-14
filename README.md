@@ -39,11 +39,25 @@ Rather than building yet another end-to-end text-to-music pipeline, our vision i
 
 
 ## 📢 News and Updates
+- 🎤 2025.05.12: Release [RapMachine](https://huggingface.co/ACE-Step/ACE-Step-v1-chinese-rap-LoRA) and fix lora training issues
+    - See [ZH_RAP_LORA.md](./ZH_RAP_LORA.md) for details. Audio Examples: https://ace-step.github.io/#RapMachine
+    - See [TRAIN_INSTRUCTION.md](./TRAIN_INSTRUCTION.md) for detailed training instructions.
+
+<p align="center">
+    <img src="assets/rap_machine_demo.gif" alt="RapMachine Demo" width="45%">
+    <img src="assets/train_demo.gif" alt="Train Demo" width="50%">
+</p>
+
+
 - 🔥 **2025.05.10:** Memory Optimization Update
   - Reduced Max VRAM to 8GB, making it more compatible with consumer devices
   - Recommended launch options:
     ```bash
     acestep --torch_compile true --cpu_offload true --overlapped_decode true
+    ```
+    Windows need to install triton:
+    ```
+    pip install triton-windows
     ```
 
 ![image](./assets/cpu_offload_performance.png)
@@ -150,7 +164,8 @@ Rather than building yet another end-to-end text-to-music pipeline, our vision i
 
 - [x] Release training code 🔥
 - [x] Release LoRA training code 🔥
-- [ ] Release RapMachine LoRA 🎤
+- [x] Release RapMachine LoRA 🎤
+- [ ] Train and Release ACE-Step V1.5
 - [ ] Release ControlNet training code 🔥
 - [ ] Release Singing2Accompaniment ControlNet 🎮
 - [ ] Release evaluation performance and technical report 📄
@@ -259,6 +274,10 @@ acestep --port 7865
 acestep --checkpoint_path /path/to/checkpoint --port 7865 --device_id 0 --share true --bf16 true
 ```
 
+* If `--checkpoint_path` is set and models exist at the path, load from `checkpoint_path`.
+* If `--checkpoint_path` is set but models do not exist at the path, auto download models to `checkpoint_path`.
+* If `--checkpoint_path` is not set, auto download models to the default path `~/.cache/ace-step/checkpoints`.
+
 If you are using macOS, please use `--bf16 false` to avoid errors.
 
 #### 🔍 API Usage
@@ -281,7 +300,11 @@ If you intend to integrate ACE-Step as a library into your own Python projects, 
 - `--device_id`: GPU device ID to use (default: 0)
 - `--share`: Enable Gradio sharing link (default: False)
 - `--bf16`: Use bfloat16 precision for faster inference (default: True)
-- `--torch_compile`: Use `torch.compile()` to optimize the model, speeding up inference (default: False). **Not Supported on Windows**
+- `--torch_compile`: Use `torch.compile()` to optimize the model, speeding up inference (default: False). 
+  - **Windows need to install triton**:
+    ```
+    pip install triton-windows
+    ```
 - `--cpu_offload`: Offload model weights to CPU to save GPU memory (default: False)
 - `--overlapped_decode`: Use overlapped decoding to speed up inference (default: False)
 
@@ -336,133 +359,7 @@ The `examples/input_params` directory contains sample input parameters that can 
 </p>
 
 ## 🔨 Train
-
-### Prerequisites
-1. Prepare the environment as described in the installation section.
-
-2. If you plan to train a LoRA model, install the PEFT library:
-   ```bash
-   pip install peft
-   ```
-
-3. Prepare your dataset in Huggingface format ([Huggingface Datasets documentation](https://huggingface.co/docs/datasets/index)). The dataset should contain the following fields:
-   - `keys`: Unique identifier for each audio sample
-   - `filename`: Path to the audio file
-   - `tags`: List of descriptive tags (e.g., `["pop", "rock"]`)
-   - `norm_lyrics`: Normalized lyrics text
-   - Optional fields:
-     - `speaker_emb_path`: Path to speaker embedding file (use empty string if not available)
-     - `recaption`: Additional tag descriptions in various formats
-
-Example dataset entry:
-```json
-{
-	"keys": "1ce52937-cd1d-456f-967d-0f1072fcbb58",
-	"filename": "data/audio/1ce52937-cd1d-456f-967d-0f1072fcbb58.wav",
-	"tags": ["pop", "acoustic", "ballad", "romantic", "emotional"],
-	"speaker_emb_path": "",
-	"norm_lyrics": "I love you, I love you, I love you",
-	"recaption": {
-		"simplified": "pop",
-		"expanded": "pop, acoustic, ballad, romantic, emotional",
-		"descriptive": "The sound is soft and gentle, like a tender breeze on a quiet evening. It's soothing and full of longing.",
-		"use_cases": "Suitable for background music in romantic films or during intimate moments.",
-		"analysis": "pop, ballad, piano, guitar, slow tempo, romantic, emotional"
-	}
-}
-```
-How to get an audio's reception? 
-
-You can use `Qwen-Omini` https://chat.qwen.ai/ to describe an audio.
-
-Here we share the prompt we used.
-
-```python
-sys_prompt_without_tag = """Analyze the input audio and generate 6 description variants. Each variant must be <200 characters. Follow these exact definitions:
-
-1.  `simplified`: Use only one most representative tag from the valid set.
-2.  `expanded`: Broaden valid tags to include related sub-genres/techniques.
-3.  `descriptive`: Convert tags into a sensory-rich sentence based *only on the sound*. DO NOT transcribe or reference the lyrics.
-4.  `synonyms`: Replace tags with equivalent terms (e.g., 'strings' → 'orchestral').
-5.  `use_cases`: Suggest practical applications based on audio characteristics.
-6.  `analysis`: Analyze the audio's genre, instruments, tempo, and mood **based strictly on the audible musical elements**. Technical breakdown in specified format.
-    *   For the `instruments` list: **Only include instruments that are actually heard playing in the audio recording.** **Explicitly ignore any instruments merely mentioned or sung about in the lyrics.** Cover all audibly present instruments.
-7. `lyrical_rap_check`: if the audio is lyrical rap
-**Strictly ignore any information derived solely from the lyrics when performing the analysis, especially for identifying instruments.**
-
-**Output Format:**
-```json
-{
-  "simplified": <str>,
-  "expanded": <str>,
-  "descriptive": <str>,
-  "synonyms": <str>,
-  "use_cases": <str>,
-  "analysis": {
-    "genre": <str list>,
-    "instruments": <str list>,
-    "tempo": <str>,
-    "mood": <str list>
-  },
-  "lyrical_rap_check": <bool>
-}
-"""
-```
-
-### Training Parameters
-
-#### Common Parameters
-- `--dataset_path`: Path to your Huggingface dataset (required)
-- `--checkpoint_dir`: Directory containing the base model checkpoint
-- `--learning_rate`: Learning rate for training (default: 1e-4)
-- `--max_steps`: Maximum number of training steps (default: 2000000)
-- `--precision`: Training precision, e.g., "bf16-mixed" (default) or "fp32"
-- `--devices`: Number of GPUs to use (default: 1)
-- `--num_nodes`: Number of compute nodes to use (default: 1)
-- `--accumulate_grad_batches`: Gradient accumulation steps (default: 1)
-- `--num_workers`: Number of data loading workers (default: 8)
-- `--every_n_train_steps`: Checkpoint saving frequency (default: 2000)
-- `--every_plot_step`: Frequency of generating evaluation samples (default: 2000)
-- `--exp_name`: Experiment name for logging (default: "text2music_train_test")
-- `--logger_dir`: Directory for saving logs (default: "./exps/logs/")
-
-#### Base Model Training
-Train the base model with:
-```bash
-python trainer.py --dataset_path "path/to/your/dataset" --checkpoint_dir "path/to/base/checkpoint" --exp_name "your_experiment_name"
-```
-
-#### LoRA Training
-For LoRA training, you need to provide a LoRA configuration file:
-```bash
-python trainer.py --dataset_path "path/to/your/dataset" --checkpoint_dir "path/to/base/checkpoint" --lora_config_path "path/to/lora_config.json" --exp_name "your_lora_experiment"
-```
-
-Example LoRA configuration file (lora_config.json):
-```json
-{
-	"r": 16,
-	"lora_alpha": 32,
-	"target_modules": [
-		"speaker_embedder",
-		"linear_q",
-		"linear_k",
-		"linear_v",
-		"to_q",
-		"to_k",
-		"to_v",
-		"to_out.0"
-	]
-}
-```
-
-### Advanced Training Options
-- `--shift`: Flow matching shift parameter (default: 3.0)
-- `--gradient_clip_val`: Gradient clipping value (default: 0.5)
-- `--gradient_clip_algorithm`: Gradient clipping algorithm (default: "norm")
-- `--reload_dataloaders_every_n_epochs`: Frequency to reload dataloaders (default: 1)
-- `--val_check_interval`: Validation check interval (default: None)
-
+See [TRAIN_INSTRUCTION.md](./TRAIN_INSTRUCTION.md) for detailed training instructions.
 
 ## 📜 License & Disclaimer
 
