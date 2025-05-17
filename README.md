@@ -3,7 +3,7 @@ This is a 1 Click installer based on the trellis 1 click installer with a embede
 Usage just Click on the run-gradio.bat file , while installing it will ask you to scroll up and check your cuda version and chose the closest one to you 1-6 avalible cuda cu118,cu121,cu124,cu126 and cu128) 
 
 Youtube Video will be posted <a href="https://www.youtube.com/@RetroUpgrade" >RetroUpgrade - Youtube</a> showing the usage of the installer. 
-Video Guide and demo of the 1 click installer : Comming soon
+Video Guide and demo of the 1 click installer : [ACE-STEP 1 CLick installer guide](https://youtu.be/Gj2H_0r_wH0)
 <hr width="100%" size="2">
 
 
